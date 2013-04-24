@@ -2,9 +2,8 @@
 #define SCHED_HPP_
 
 #include <cstddef>
-#include <cstdbool>
 
-namespace pml::sched {
+namespace sched {
 
 struct Context;
 
@@ -12,6 +11,9 @@ struct TaskFn {
     // returns true if task succeeded, false if it failed
     bool (*func)(Context *cx, bool was_stolen, void *data);
     void *data;
+
+    TaskFn() {}
+    TaskFn(bool (*f)(Context*, bool, void*), void *d) : func(f), data(d) {}
 };
 
 Context *init(void);
@@ -21,6 +23,6 @@ void finish(Context *cx);       // call only when finishing initial context
 int fork(Context *cx, TaskFn fn1, TaskFn fn2);
 int forkN(Context *cx, size_t n, TaskFn *fns);
 
-} // namespace pml::sched
+} // namespace sched
 
 #endif // SCHED_HPP_

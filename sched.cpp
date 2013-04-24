@@ -2,7 +2,7 @@
 
 #include "sched.hpp"
 
-namespace pml::sched {
+namespace sched {
 
 Context *init() { return NULL; }
 void finish(Context *cx) { (void) cx; }
@@ -21,4 +21,4 @@ int forkN(Context *cx, size_t n, TaskFn *fns) {
     return n;
 }
 
-}
+} // namespace sched

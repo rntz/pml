@@ -3,13 +3,24 @@
 
 #include <cstddef>
 
-namespace pml::gc {
+namespace gc {
 
 typedef void *ptr_t;
 
 struct Context;
 struct CycleContext;
 
+
+/* ---------- Context management ---------- */
+Context *init();
+void finish(Context *cx);
+
+Context *create(Context *parent);
+Context *merge(Context *parent, void *parent_find_roots_data,
+               Context *child, void *child_find_roots_data);
+void suspend(Context *heap);
+
+
 /* ---------- Allocation ---------- */
 
 /* Note that calling alloc() may cause a GC cycle. Therefore any memory
@@ -20,13 +31,6 @@ struct CycleContext;
  * cycle.
  */
 ptr_t alloc(Context *cx, size_t size, void *find_roots_data);
-
-
-/* ---------- Heap management ---------- */
-Context *heap_create(Context *parent); // pass NULL to create initial heap
-Context *heap_merge(Context *parent, void *parent_find_roots_data,
-                    Context *child, void *child_find_roots_data);
-void heap_suspend(Context *heap);
 
 
 /* ---------- GC interface and client responsibilities ---------- */
@@ -45,6 +49,6 @@ void find_ptrs(CycleContext *cx, ptr_t object);
 
 } // namespace client
 
-} // namespace pml::gc
+} // namespace gc
 
 #endif // GC_HPP_
