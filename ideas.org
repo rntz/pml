@@ -1,0 +1,20 @@
+* Noncontiguous stack using glue code
+
+Cactus stacks are a problem, but if we allow ourselves noncontiguous stacks they
+become much less of a problem. And we can *have* noncontiguous stacks without an
+insane amount of overhead using the following trick:
+
+A stack is a linked list of contiguous "stack chunks" (and a current location in
+this list). When we make a call and are out of space in our current stack chunk,
+we use the next one (allocating one if we need it). The first things we put on
+this next chunk are a pointer to the previous chunk and a special return address
+pointing into a piece of "glue code" that adjusts %esp to point to the previous
+chunk.
+
+In this way we only have to pay for having a noncontiguous stack when we hit
+stack boundaries.
+
+Problem: what about "sitting on a boundary" swapping back & forth?
+
+could copy a constant fraction of the old chunk onto new stack to give buffer
+zone
