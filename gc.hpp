@@ -12,9 +12,9 @@ struct CycleContext;
 
 /* ---------- Allocation ---------- */
 
-/* Note that calling gc_alloc() may cause a GC cycle. Therefore any memory
- * allocated by a previous call to gc_alloc must be initialized before calling
- * gc_alloc() again.
+/* Note that calling alloc() may cause a GC cycle. Therefore any memory
+ * allocated by a previous call to alloc() must be initialized before calling
+ * alloc() again.
  *
  * `find_roots_data' is passed to client::find_roots_alloc() if we do a GC
  * cycle.
