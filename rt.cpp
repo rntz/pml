@@ -1,6 +1,6 @@
 #include "rt.hpp"
 
-namespace runtime {
+namespace rt {
 
 Context *Context::init() {
     Context *cx = new Context();
@@ -78,4 +78,4 @@ int Context::forkN(size_t n, Root *rets, TaskFn *fns) {
 
 void Context::fail() { failed_ = true; }
 
-} // namespace runtime
+} // namespace rt

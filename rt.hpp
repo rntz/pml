@@ -12,7 +12,7 @@
 // gc::client::find_ptrs(), but not
 // gc::client::find_roots_{merge,alloc}().
 
-namespace runtime {
+namespace rt {
 
 struct Context;
 struct Root;
@@ -124,6 +124,6 @@ struct Root {
 };
 
 
-} // namespace runtime
+} // namespace rt
 
 #endif // RT_HPP_
