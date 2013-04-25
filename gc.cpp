@@ -17,7 +17,11 @@ namespace gc {
 
 using namespace util;
 
-// Used to distinguish younger from older heaps.
+/* Age counters are used to distinguish objects in child heaps from those in
+ * ancestor heaps. They are monotonically increasing within the partial ordering
+ * on heaps formed by memory visibility. That is to say, if heap A can see
+ * objects in heap B, then heap A has a greater age than heap B.
+ */
 typedef uint32_t age_t;
 
 /* ---------- Chunks and blocks ---------- */
