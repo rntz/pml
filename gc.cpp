@@ -17,11 +17,14 @@ namespace gc {
 
 using namespace util;
 
+// Used to distinguish younger from older heaps.
+typedef uint32_t age_t;
+
 /* ---------- Chunks and blocks ---------- */
 extern "C" {
     typedef struct chunk chunk_t;
-    typedef struct block_header block_header_t;
-    typedef struct block block_t;
+    typedef struct free_block free_block_t;
+    typedef struct used_block used_block_t;
 
     // Header for a contiguous chunk of allocatable space
     struct chunk {
@@ -29,69 +32,79 @@ extern "C" {
         chunk_t *next;
     };
 
-    // Header for an allocated block
-    struct block_header {
+    struct used_block {
         // `size' includes space used by header
         size_t size;            // low bits used for metadata
+        age_t age;
     };
 
-    struct block {
-        block_header_t header;
-        // Following fields used only if block is free.
-        block_t *next;         // next free block
+    struct free_block {
+        size_t size;            // ditto used_block
+        free_block_t *next;     // next free block
     };
 }
 
 /* ---------- Manipulating block headers ---------- */
-#define BLOCK_MIN_ALIGN 4
-#define BLOCK_INFO_MASK 3
-#define BLOCK_FREE      1
-#define BLOCK_MARKED    2
+#define BLOCK_SIZE_ALIGNMENT 4
+#define BLOCK_INFO_MASK      3
+#define BLOCK_USED_FLAG      1
+#define BLOCK_MARKED_FLAG    2
 
-#define BLOCK_ALIGN MAX(MACHINE_ALIGNMENT, BLOCK_MIN_ALIGN)
-#define BLOCK_HEADER_SIZE ALIGN_UP(MACHINE_ALIGNMENT, sizeof(block_header_t))
+#define MACHINE_ALIGN(x) ALIGN_UP(MACHINE_ALIGNMENT, x)
+#define BLOCK_SIZE_ALIGN(x) ALIGN_UP(BLOCK_SIZE_ALIGNMENT, x)
+#define USED_BLOCK_HEADER_SIZE MACHINE_ALIGN(sizeof(used_block_t))
+#define CHUNK_HEADER_SIZE MACHINE_ALIGN(sizeof(chunk_t))
 
-static inline block_t *block_from_ptr(void *ptr) {
+#define MIN_BLOCK_SIZE BLOCK_SIZE_ALIGN(                                \
+        MAX(sizeof(free_block_t), USED_BLOCK_HEADER_SIZE + 2*sizeof(void*)))
+
+static inline used_block_t *block_from_ptr(void *ptr) {
     assert (ALIGNED(MACHINE_ALIGNMENT, (uintptr_t) ptr));
-    return (block_t*)(((char*)ptr) - BLOCK_HEADER_SIZE);
+    return (used_block_t*)(((char*)ptr) - USED_BLOCK_HEADER_SIZE);
 }
 
-static inline void *block_to_ptr(block_t *blk) {
-    return (void*)(((char*)blk) + BLOCK_HEADER_SIZE);
+static inline void *block_to_ptr(used_block_t *blk) {
+    return (void*)(((char*)blk) + USED_BLOCK_HEADER_SIZE);
 }
 
-static inline size_t block_size(block_t *blk) {
-    return blk->header.size & ~BLOCK_INFO_MASK;
+#define BLOCK_SIZE(blk) ((bool)((blk)->size & ~BLOCK_INFO_MASK))
+#define BLOCK_USED(blk) ((bool)((blk)->size & BLOCK_USED_FLAG))
+#define BLOCK_FREE(blk) (!BLOCK_USED(blk))
+#define BLOCK_MARKED(blk) ((bool)((blk)->size & BLOCK_MARKED_FLAG))
+
+static inline free_block_t *block_make_free(used_block_t *blk) {
+    assert (offsetof(used_block_t, size) == offsetof(free_block_t, size));
+    assert (!BLOCK_MARKED(blk) && BLOCK_USED(blk));
+    blk->size &= ~BLOCK_USED_FLAG;
+    return (free_block_t*) blk;
 }
 
-static inline bool block_is_marked(block_t *blk) {
-    return (bool)(blk->header.size & BLOCK_MARKED);
+static inline used_block_t *block_make_used(free_block_t *blk) {
+    assert (offsetof(used_block_t, size) == offsetof(free_block_t, size));
+    assert (!BLOCK_MARKED(blk) && BLOCK_FREE(blk));
+    blk->size |= BLOCK_USED_FLAG;
+    return (used_block_t*) blk;
 }
 
-static inline bool block_is_free(block_t *blk) {
-    return (bool)(blk->header.size & BLOCK_FREE);
+static inline void mark_block(used_block_t *blk) {
+    assert(!BLOCK_MARKED(blk));
+    blk->size |= BLOCK_MARKED_FLAG;
 }
 
-static inline void block_set_free(block_t *blk)
-{ blk->header.size |= BLOCK_FREE; }
-static inline void block_set_used(block_t *blk)
-{ blk->header.size &= ~BLOCK_FREE; }
-
-static inline void mark_block(block_t *blk)
-{ blk->header.size |= BLOCK_MARKED; }
-static inline void unmark_block(block_t *blk)
-{ blk->header.size &= ~BLOCK_MARKED; }
+static inline void unmark_block(used_block_t *blk) {
+    assert (BLOCK_MARKED(blk));
+    blk->size &= ~BLOCK_MARKED_FLAG;
+}
 
 
-/* ---------- Context operations ---------- */
+/* ---------- Contexts and Heaps ---------- */
 // Carefully calculated so that we GC when we use up our initial chunk.
 #define INITIAL_OLD_SPACE                                               \
-    ((size_t)((MIN_CHUNK_SIZE - ALIGN_UP(BLOCK_ALIGN, sizeof(chunk_t))) \
-              / GC_NEWSPACE_RATIO))
+    ((size_t)((MIN_CHUNK_SIZE - CHUNK_HEADER_SIZE) / GC_NEWSPACE_RATIO))
 
 struct Heap {
     chunk_t *chunks;
-    block_t *free_head, *free_tail;
+    free_block_t *free_head, *free_tail;
     size_t used_space;
     size_t old_space;
 
@@ -105,6 +118,7 @@ struct Context {
     Context *children;
     Context *next_child;
     Heap heap;
+    age_t age;
     pthread_mutex_t lock;
 
     Context() : parent(NULL), children(NULL), next_child(NULL), heap()
@@ -119,19 +133,28 @@ struct Context {
     }
 };
 
+
+/* ---------- ALLOCATION ---------- */
+
+// helper function forward decls
+static void check_for_alloc_gc(Heap *heap, size_t extra, void *find_roots_data);
+static free_block_t *split_block(Heap *heap, free_block_t *blk, size_t size);
+static void remove_from_free_list(
+    Heap *heap, free_block_t *prev, free_block_t *blk);
+static free_block_t *get_block_from_new_chunk(Heap *heap, size_t size);
+
 ptr_t alloc(Context *cx, size_t size, void *find_roots_data) {
-    size_t real_size = BLOCK_HEADER_SIZE + size;
+    size_t real_size = BLOCK_SIZE_ALIGN(USED_BLOCK_HEADER_SIZE + size);
+    Heap *heap = &cx->heap;
 
     // Check whether allocating would exceed our limits. If so, run a GC cycle.
-    die("unimplemented");   // FIXME
-    (void) find_roots_data;
+    check_for_alloc_gc(heap, real_size, find_roots_data);
 
     // Search for a free block to use.
-    block_t *prev = NULL, *blk = cx->heap.free_head;
+    free_block_t *prev = NULL, *blk = heap->free_head;
     while (blk) {
-        assert (block_is_free(blk));
-        assert (!block_is_marked(blk)); // free blocks always unmarked
-        if (real_size <= block_size(blk))
+        assert (BLOCK_FREE(blk) && !BLOCK_MARKED(blk));
+        if (real_size <= BLOCK_SIZE(blk))
             break;              // found a block
         prev = blk;
         blk = blk->next;
@@ -139,15 +162,83 @@ ptr_t alloc(Context *cx, size_t size, void *find_roots_data) {
 
     if (!blk) {
         // Didn't find an block to allocate!
-        die("unimplemented");   // FIXME
+        blk = get_block_from_new_chunk(heap, real_size);
+        prev = NULL;            // new block is on front of free list
     }
 
-    // Allocate this block.
-    block_set_used(blk);
+    // If the block is large enough, we can just split it.
+    if (BLOCK_SIZE(blk) - real_size >= MIN_BLOCK_SIZE) {
+        // Split the block.
+        blk = split_block(heap, blk, real_size);
+    } else {
+        // Allocate the entire block.
+        remove_from_free_list(heap, prev, blk);
+    }
 
-    // Remove block from list and make the free list start where we left off.
-    block_t *head = cx->heap.free_head,
-            *tail = cx->heap.free_tail;
+    used_block_t *block = block_make_used(blk);
+    block->age = cx->age;
+    assert (BLOCK_USED(blk) && !BLOCK_MARKED(blk));
+    return block_to_ptr(block);
+}
+
+static void check_for_alloc_gc(Heap *heap, size_t extra, void *find_roots_data)
+{
+    // die("unimplemented");   // FIXME
+    (void) heap;
+    (void) extra;
+    (void) find_roots_data;
+}
+
+static free_block_t *get_block_from_new_chunk(Heap *heap, size_t reqsz) {
+    size_t size = MIN(MIN_CHUNK_SIZE, CHUNK_HEADER_SIZE + reqsz);
+    chunk_t *chunk = (chunk_t*) smalloc(size);
+    chunk->size = size;
+    chunk->next = heap->chunks;
+    heap->chunks = chunk;
+
+    free_block_t *block = (free_block_t*)(((char*)chunk) + CHUNK_HEADER_SIZE);
+    assert (ALIGNED(MACHINE_ALIGNMENT, (uintptr_t) block));
+
+    // Set block metadata.
+    block->size = size - CHUNK_HEADER_SIZE;
+    assert (BLOCK_FREE(block) && !BLOCK_MARKED(block));
+
+    // Push block on front of free list.
+    block->next = heap->free_head;
+    heap->free_head = block;
+    if (!block->next) {
+        heap->free_tail = block;
+    }
+
+    return block;
+}
+
+static free_block_t *split_block(Heap *heap, free_block_t *blk, size_t size) {
+    size_t blk_size = BLOCK_SIZE(blk);
+    size_t new_size = blk_size - size;
+    assert (BLOCK_FREE(blk)
+            && !BLOCK_MARKED(blk)
+            && blk_size > size
+            && new_size >= MIN_BLOCK_SIZE
+            && size >= MIN_BLOCK_SIZE
+            && ALIGNED(BLOCK_SIZE_ALIGNMENT, new_size));
+
+    free_block_t *split = (free_block_t*)(((char*)blk) + new_size);
+    blk->size = new_size;
+    split->size = size;
+    assert (BLOCK_FREE(blk) && !BLOCK_MARKED(blk)
+            && BLOCK_FREE(split) && !BLOCK_MARKED(split));
+
+    return split;
+    (void) heap;
+}
+
+static void remove_from_free_list(
+    Heap *heap, free_block_t *prev, free_block_t *blk)
+{
+    assert (!prev || prev->next == blk);
+    free_block_t *head = heap->free_head,
+                 *tail = heap->free_tail;
 
     if (prev && blk->next) {
         // blk isn't the head or the tail
@@ -155,40 +246,49 @@ ptr_t alloc(Context *cx, size_t size, void *find_roots_data) {
 
         prev->next = NULL;
         tail->next = head;
-        cx->heap.free_head = blk->next;
-        cx->heap.free_tail = prev;
+        heap->free_head = blk->next;
+        heap->free_tail = prev;
     }
     else if (!prev) {
         // we just used the head
         assert (blk == head && blk != tail);
-        cx->heap.free_head = blk->next;
+        heap->free_head = blk->next;
     }
     else if (!blk->next) {
         // we just used the tail
         assert (blk != head && blk == tail);
         prev->next = NULL;
-        cx->heap.free_tail = prev;
+        heap->free_tail = prev;
     }
     else {
         // we just used the only block, which is both head & tail
         assert (blk == head && blk == tail);
-        cx->heap.free_head = cx->heap.free_tail = NULL;
+        heap->free_head = heap->free_tail = NULL;
     }
 
-    assert (cx->heap.free_tail
-            ? (cx->heap.free_head && cx->heap.free_tail->next == NULL)
-            : !cx->heap.free_head);
-    assert (!block_is_free(blk) && !block_is_marked(blk));
-    return block_to_ptr(blk);
+    assert (heap->free_tail
+            ? (heap->free_head && heap->free_tail->next == NULL)
+            : !heap->free_head);
 }
 
+
+/* ---------- Other context manipulation ---------- */
 Context *init() {
     return new Context();
 }
 
 void finish(Context *cx) {
-    die("unimplemented");
-    (void) cx;
+    assert (!cx->children && !cx->parent && !cx->next_child);
+
+    // Free all chunks.
+    chunk_t *chunk = cx->heap.chunks;
+    while (chunk) {
+        chunk_t *p = chunk;
+        chunk = p->next;
+        sfree(p->size, p);
+    }
+
+    delete cx;
 }
 
 Context *create(Context *parent) {

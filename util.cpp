@@ -20,6 +20,7 @@ void die(const char *format, ...) {
 
 void vdie(const char *format, va_list ap) {
     vfprintf(stderr, format, ap);
+    fputc('\n', stderr);
     die();
 }
 
@@ -57,7 +58,7 @@ void *smemalign(size_t alignment, size_t size) {
     return p;
 }
 
-void sfree(void *p, size_t size) {
+void sfree(size_t size, void *p) {
     free(p);
     (void) size;
 }
