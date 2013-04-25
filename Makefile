@@ -1,7 +1,7 @@
 CXX=g++
-CXXFLAGS= -Wall -Wextra -Werror
+CXXFLAGS= -Wall -Wextra -Werror -std=c++11
 
-SRCS=gc sched rt
+SRCS=gc sched rt util
 INCS=$(addsuffix .hpp,$(SRCS))
 OBJS=$(addsuffix .o,$(SRCS))
 
