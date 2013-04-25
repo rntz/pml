@@ -297,6 +297,7 @@ void finish(Context *cx) {
 
 Context *create(Context *parent) {
     assert (parent != NULL);
+    die("unimplemented");   // FIXME
     (void) parent;
     return NULL;
 }
@@ -305,23 +306,25 @@ Context *merge(
     Context *parent, void *parent_find_roots_data,
     Context *child, void *child_find_roots_data)
 {
+    die("unimplemented");   // FIXME
     (void) parent; (void) parent_find_roots_data;
     (void) child; (void) child_find_roots_data;
     return NULL;
 }
 
 void suspend(Context *heap) {
+    die("unimplemented");   // FIXME
     (void) heap;
 }
 
 // should never get called
 void found_roots(CycleContext *cx, size_t nroots, ptr_t *roots) {
-    abort();
+    die("unimplemented");   // FIXME
     (void) cx; (void) nroots; (void) roots;
 }
 
 void found_ptrs(CycleContext *cx, size_t nptrs, ptr_t *ptrs) {
-    abort();
+    die("unimplemented");   // FIXME
     (void) cx; (void) nptrs; (void) ptrs;
 }
 
